@@ -1,98 +1,95 @@
 from fastmcp import FastMCP
-from datetime import datetime
-import search_ref
+from pydantic import BaseModel
+from typing import Optional
 import base64
-import os
-import mimetypes
 
-mcp = FastMCP("RPi-Echo-Test")
+mcp = FastMCP("Elowen Orchestrator")
 
+
+# ── Response models ───────────────────────────────────────────────────────────
+
+class ProductResponse(BaseModel):
+    brand:       str
+    title:       str
+    price:       str
+    meta:        Optional[str] = None
+    highlight:   Optional[str] = None
+    description: str
+    imageBase64: Optional[str] = None
+    bannerText:  Optional[str] = None
+    bannerColor: Optional[str] = None
+
+
+class ChoiceResponse(BaseModel):
+    label: str
+    icon:  Optional[str] = None  # SF Symbol name
+    type:  str                   # "primary" | "secondary" | "skip"
+
+
+class QueryResponse(BaseModel):
+    type:     str                                  # "message" | "confirmation" | "error"
+    text:     Optional[str]                  = None
+    products: Optional[list[ProductResponse]] = None
+    question: Optional[str]                  = None
+    choices:  Optional[list[ChoiceResponse]]  = None
+    message:  Optional[str]                  = None
+
+
+# ── Tool ──────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def ping(message: str = "ping") -> dict:
+def query(
+    session_id:       str,
+    message:          str,
+    skill_level:      Optional[str] = None,
+    home_type:        Optional[str] = None,
+    budget:           Optional[str] = None,
+    complexity_level: Optional[str] = None,
+    local_climate:    Optional[str] = None,
+    image:            Optional[str] = None,  # base64 JPEG
+) -> QueryResponse:
     """
-    Responds with a simple 'pong' structure.
-    Useful for client initialization and connectivity checks.
+    Route a sanitized user message to the appropriate agent and return a typed response.
+
+    The message has already been PII-sanitized on-device. Personal identifiers
+    are replaced with typed placeholders: [name], [address], [postal-code], [phone], [email].
     """
-    return {
-        "ok": True,
-        "echo": message,
-        "reply": "pong",
-        "server": "raspberry-pi",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
+    context = {k: v for k, v in {
+        "skill_level":      skill_level,
+        "home_type":        home_type,
+        "budget":           budget,
+        "complexity_level": complexity_level,
+        "local_climate":    local_climate,
+    }.items() if v is not None}
 
+    image_bytes = base64.b64decode(image) if image else None
 
-def _encode_image(image_path: str) -> tuple[str, str]:
-    if not os.path.exists(image_path):
-        return "", ""
-    
-    mime_type, _ = mimetypes.guess_type(image_path)
-    if not mime_type:
-        mime_type = "image/png"  # fallback
-        
     try:
-        try:
-            from PIL import Image
-            import io
-            with Image.open(image_path) as img:
-                # Resize to keep payload reasonable
-                img.thumbnail((400, 400))
-                buffer = io.BytesIO()
-                # Use format based on mime_type
-                save_format = "PNG" if mime_type == "image/png" else "JPEG"
-                if save_format == "JPEG" and img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                img.save(buffer, format=save_format, optimize=True, quality=85)
-                img_bytes = buffer.getvalue()
-        except ImportError:
-            # Fallback if Pillow is not installed
-            with open(image_path, "rb") as f:
-                img_bytes = f.read()
-                
-        return base64.b64encode(img_bytes).decode('utf-8'), mime_type
+        return orchestrate(
+            session_id=session_id,
+            message=message,
+            context=context,
+            image=image_bytes,
+        )
     except Exception as e:
-        print(f"Failed to encode {image_path}: {e}")
-        return "", ""
+        return QueryResponse(type="error", message=str(e))
 
 
-@mcp.tool()
-def search_grocery(main_item: str, full_title: str) -> dict:
-    """
-    Searches for grocery products based on main item and full title, returning the top 3 most relevant results with productID, Price, and base64 image data.
-    """
-    products = search_ref.load_products(search_ref.CSV_FILE)
-    best, suggestions = search_ref.find_best_match(full_title, products)
-    
-    candidates = []
-    if best:
-        candidates.append(best)
-    candidates.extend(suggestions[:2])  # Take up to 2 more from suggestions
-    
-    results = []
-    for product in candidates[:3]:  # Ensure only top 3
-        product_id = product.get('productId', '')
-        price = search_ref.format_price(product)
-        description = product.get('description', '')
-        package_sizing = product.get('packageSizing', '')
-        
-        # Image handling
-        image_filename = f"{product_id}.png"
-        image_path = os.path.join("product_images", image_filename)
-        
-        image_b64, image_mime = _encode_image(image_path)
-            
-        results.append({
-            "productID": product_id,
-            "Price": price,
-            "description": description,
-            "packageSizing": package_sizing,
-            "imageBase64": image_b64,
-            "imageMimeType": image_mime
-        })
-    
-    return {"results": results}
+def orchestrate(
+    session_id: str,
+    message:    str,
+    context:    dict,
+    image:      Optional[bytes],
+) -> QueryResponse:
+    """Stub — replace with real agent routing."""
+    return QueryResponse(
+        type="message",
+        text=f"[Dev echo] You asked: {message}",
+        products=[],
+    )
 
+
+# ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     mcp.run(
